@@ -7,7 +7,7 @@ else
    export VENV_BIN=.venv/bin
 endif
 
-export SRC_DIR=project_template
+export SRC_DIR=image_drift_generator
 export PYTHONPATH='$(shell pwd)'
 ifndef BRANCH_NAME
 	export BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)

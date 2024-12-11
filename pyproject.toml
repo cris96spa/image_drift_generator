@@ -1,8 +1,8 @@
 [project]
-name = "project_template"
+name = "image_drift_generator"
 version = "0.0.0"
 authors = [{ name = "Cristian" }]
-description = "Project Template"
+description = "Image Drift Generator"
 readme = "README.md"
 license = { file="LICENSE" }
 requires-python = ">=3.12"
@@ -44,6 +44,9 @@ dependencies = [
     "langchain-openai",
     "langgraph",
     "langfuse",
+    "opencv-python",
+    "holoviews",
+    "shap",
 ]
 
 # list of project dev dependencies
