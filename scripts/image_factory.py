@@ -326,6 +326,20 @@ class ImageTransformFactory:
     def _make_transform(
         transform_element: TransformInfo,
     ) -> transforms.Transform:
+        """Create a transformation based on the transform element"
+
+        parameters:
+        -----------
+        transform_element: transformation element to be created
+
+        returns:
+        --------
+        transformation to be applied to the image dataset.
+
+        raises:
+        -------
+        ValueError: if the transformation is not supported.
+        """
         if transform_element is None:
             raise ValueError('Transform element is None')
         if transform_element.transf_type in SUPPORTED_TRANSFORM:
@@ -339,12 +353,15 @@ class ImageTransformFactory:
             params = transf_info.constant_params.copy()
             drift_params = transf_info.drift_params
             # Update drift parameters with the drift level
-            params.update(
-                {
-                    key: value * transform_element.drift_level
-                    for key, value in drift_params.items()
-                }
-            )
+            for key, value in drift_params.items():
+                if transform_cls == transforms.ColorJitter:
+                    params[key] = (
+                        value * transform_element.drift_level,
+                        value * transform_element.drift_level,
+                    )
+                else:
+                    params[key] = value * transform_element.drift_level
+
             transform = transform_cls(**params)
             return transform
         else:
