@@ -1,33 +1,42 @@
-# type: ignore
-from operator import is_
 import os
 import shutil
 from collections.abc import Sequence
-from random import sample
 from uuid import uuid4
-from time import time
+from typing import cast, Callable
 import polars as pl
+from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from torchvision.utils import save_image
-from image_drift_generator.image_factory import *
+from image_drift_generator.image_factory import (
+    ImageTransformFactory,
+    AVAILABLE_TRANSFORM_TYPES,
+)
 from abc import ABC, abstractmethod
 import numpy as np
 import random
+from utils.settings.settings_provider import SettingsProvider
+import sys
+from loguru import logger
+from image_drift_generator.enums import FileType, FolderType
+from image_drift_generator.models import ImageDataCategoryInfo, TransformInfo
+from image_drift_generator.embedder import ImageEmbedder
+from utils.stats import compute_embeddings_kl_divergence
+
+logger.add(
+    sys.stderr,
+    format='{time:MMMM D, YYYY > HH:mm:ss} | {level} | {message} | {extra}',
+)
 
 
 class DatasetGenerator(ABC):
+    """Abstract class for dataset generators. It provides the basic functionalities to generate datasets."""
+
     def __init__(self, seed: int):
         self.seed = seed
 
-        # Check if GPU is available, default to CPU
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-        else:
-            self.device = torch.device('cpu')
+        self.device = SettingsProvider().get_device()
 
         # Setting seed for reproducibility
         np.random.seed(seed)
@@ -42,9 +51,11 @@ class DatasetGenerator(ABC):
             self.torch_generator = torch.Generator(device=self.device)
             self.torch_generator.manual_seed(seed)
 
-        self.current_id = 0
-        self.current_timestamp = 1717232400.0
-        self.sample_delta_timestamp = 1800  # 30 minutes
+        self._current_id = 0
+        self._default_timestamp = SettingsProvider().get_default_timestamp()
+        self.sample_delta_timestamp = (
+            SettingsProvider().get_default_delta_timestamp()
+        )  # 30 minutes
         self.numpy_generator = np.random.default_rng(seed=seed)
 
     @abstractmethod
@@ -54,42 +65,46 @@ class DatasetGenerator(ABC):
     @abstractmethod
     def add_abrupt_drift(
         self,
-        drift_target: DriftTarget,
-        drift_level: float | None,
-        input_drift_type: InputDriftType | None = None,
         **kwargs,
     ):
         raise NotImplementedError
 
-    @abstractmethod
-    def get_dataschema(self):
-        raise NotImplementedError
-
 
 class ImageDatasetGenerator(DatasetGenerator):
-    """Image Dataset Generator class. Allow to generate drifted image datasets.
+    """
+    Image Dataset Generator class. Allow to generate drifted image datasets.
 
-    Attributes:
-    -----------
-    seed: seed for the random generator
-    input_path: path to the input images. The images folder should be organized as follow:
-        input_path
-            |--- class1
-            |--- class2
-            |--- ...
-    output_path: path to the output images. The images folder will be organized as follow:
-        output_path
-            |--- sampled_images.zip
-            |--- input_mapping.parquet
-            |--- target.parquet
-    input_dim: dimension of the input images (Width, Height). Default is (224, 224).
-    batch_size: batch size for the dataloader. Default is 32
+    Parameters:
+        seed (int): seed for the random generator
+        input_path (str): path to the input images. The images folder should be organized as follow:
+            input_path
+                |--- class1
+                |--- class2
+                |--- ...
+        input_dim (int or tuple of int): dimension of the input images (Width, Height). Default is (224, 224).
+        batch_size (int): batch size for the dataloader. Default is 32
+        organize_by_class (bool): if True, the sampled images will be organized by classes in the output folder. Default is False.
+        sample_delta_timestamp (int): delta timestamp between two consecutive samples. Default is 60 seconds.
+        shuffle (bool): if True, the dataloader will shuffle the samples. Default is True.
+        compute_embeddings (bool): if True, the generator will compute the embeddings of the images. Default is False.
+
+    Example:
+        1. Instantiate the generator with the input and output paths
+        2. Call the `add_abrupt_drift` method to instanciate a transformation pipeline by providing:
+            - `transform_list`: a list of transformations to apply to the images
+        3. Call the `sample` method to generate the images and store them in the output folder along with the input mapping and target parquet files.
     """
 
     DATA_FOLDER = 'sampled_images'
     INPUT_MAPPING_FILE = 'input_mapping.parquet'
     TARGET_FILE = 'target.parquet'
-    FILE_TYPE = 'png'
+    EMBEDDING_FILE = 'embeddings.parquet'
+    FILE_TYPE = FileType.PNG
+    EMBEDDING_FILE_TYPE = FileType.PARQUET
+
+    TRASFORMATION_METHOD_COLUMN = 'trasformation_method'
+    SIMILARITY_COLUMN = 'similarity'
+    DRIFT_LEVEL_COLUMN = 'drift_level'
 
     def __init__(
         self,
@@ -100,11 +115,18 @@ class ImageDatasetGenerator(DatasetGenerator):
         organize_by_class: bool = False,
         sample_delta_timestamp: int | None = None,
         shuffle: bool = True,
+        compute_embeddings: bool = False,
     ):
         super().__init__(seed)
 
-        self.input_dim = input_dim or (224, 224)
-        self.batch_size = batch_size or 32
+        self.input_dim = (
+            input_dim or SettingsProvider().get_default_input_dim()
+        )
+        self.batch_size = (
+            batch_size or SettingsProvider().get_default_batch_size()
+        )
+
+        self._current_timestamp = self._default_timestamp
 
         # Get the input transform pipeline. It consists of a resize and a tensorization
         self.input_transform = ImageTransformFactory.make_input_pipeline(
@@ -130,13 +152,18 @@ class ImageDatasetGenerator(DatasetGenerator):
 
         # Initialize the transformation pipeline
         self.transform_pipeline = None
+        self._transform_list = None
 
         # Initialize the sample delta timestamp
-        self.sample_delta_timestamp = sample_delta_timestamp or 60
+        self.sample_delta_timestamp = (
+            sample_delta_timestamp
+            or SettingsProvider().get_default_delta_timestamp()
+        )
 
         # Folder definition
         self.input_path = input_path
         self.organize_by_class = organize_by_class
+        self.compute_embeddings = compute_embeddings
 
     def sample(
         self, num_samples: int, output_path: str
@@ -144,21 +171,21 @@ class ImageDatasetGenerator(DatasetGenerator):
         """Sample num_samples images from the dataset.
         This method will sample num_samples images from the dataset and apply the transformation pipeline if defined.
 
-        parameters:
-        -----------
-        num_samples: number of samples to extract. Must be less than the number of residual samples in the dataset
-                - output_path: path to the output images. The images folder will be organized as follow:
-        output_path
-            |--- sampled_images.zip
-            |--- input_mapping.parquet
-            |--- target.parquet
-        raises:
-        -------
-        ValueError: if num_samples is greater than the number of residual samples in the dataset
+        Args:
+            num_samples (int): number of samples to extract. Must be less than the number of residual samples in the dataset
+            output_path (str): path to the output images. The images folder will be organized as follow:
+                output_path
+                    |--- sampled_images.zip
+                    |--- input_mapping.parquet
+                    |--- target.parquet
+                    |--- embeddings.parquet (if compute_embeddings is True)
 
-        returns:
-        --------
-        ImageDataCategoryInfo: object containing the sampled images, the input mapping and the target data"""
+        Returns:
+            ImageDataCategoryInfo: object containing the sampled images, the input mapping and the target data
+
+        Raises:
+            ValueError: if num_samples is greater than the number of residual samples in the dataset
+        """
 
         # Check if the number of samples required is greater than the number of residual samples in the dataset
         if num_samples + self.current_id > len(self.dataset):
@@ -170,11 +197,12 @@ class ImageDatasetGenerator(DatasetGenerator):
         sampled_count = 0
         input_mapping_data = []
         target_data = []
+        embeddings_data = []
 
         # Skip the samples already seen
-        data_iterator = iter(self.dataloader)
-        for _ in range(self.current_id // self.batch_size):
-            next(data_iterator)
+        data_iterator = cast(DataLoader, iter(self.dataloader))
+        for i in range(self.current_id // self.batch_size):
+            next(data_iterator)  # type: ignore
 
         # Sample the images and apply the transformation pipeline if defined
         for images, labels in data_iterator:
@@ -199,6 +227,7 @@ class ImageDatasetGenerator(DatasetGenerator):
                 labels=labels,
                 input_mapping_data=input_mapping_data,
                 target_data=target_data,
+                embeddings_data=embeddings_data,
                 output_path=output_path,
             )
 
@@ -212,11 +241,28 @@ class ImageDatasetGenerator(DatasetGenerator):
 
         # 2. Save the dataframes
         with open(
-            os.path.join(output_path, self.INPUT_MAPPING_FILE), mode='ab'
+            os.path.join(output_path, self.INPUT_MAPPING_FILE), mode='wb'
         ) as f:
             input_mapping.write_parquet(f)
-        with open(os.path.join(output_path, self.TARGET_FILE), mode='ab') as f:
+        with open(os.path.join(output_path, self.TARGET_FILE), mode='wb') as f:
             target.write_parquet(f)
+        if self.compute_embeddings:
+            embeddings = pl.DataFrame(embeddings_data)
+            embeddings = embeddings.with_columns(
+                pl.col('embedding')
+                .cast(pl.Array(pl.Float64, 512))
+                .alias('embedding')
+            )
+            with open(
+                os.path.join(output_path, self.EMBEDDING_FILE), mode='wb'
+            ) as f:
+                embeddings.write_parquet(f)
+
+            EMBEDDING_FYLE = os.path.join(output_path, self.EMBEDDING_FILE)
+            EMBEDDING_FYLE_TYPE = self.EMBEDDING_FILE_TYPE
+        else:
+            EMBEDDING_FYLE = None
+            EMBEDDING_FYLE_TYPE = None
 
         # 3. Zip the sampled images
         input_folder = self._make_archive(output_path)
@@ -230,6 +276,8 @@ class ImageDatasetGenerator(DatasetGenerator):
             input_mapping=input_mapping,
             target=target,
             is_target_folder=False,
+            input_embedding_file_path=EMBEDDING_FYLE,
+            input_embedding_file_type=EMBEDDING_FYLE_TYPE,
         )
 
     def _save_samples_wrapper(
@@ -238,22 +286,10 @@ class ImageDatasetGenerator(DatasetGenerator):
         labels,
         input_mapping_data: list,
         target_data: list,
+        embeddings_data: list,
         output_path: str,
     ) -> None:
-        """Save the images to the output folder.
-
-        parameters:
-        -----------
-        images: tensor of images
-        labels: tensor of labels
-        input_mapping_data: list of input mapping data that will be updated in place
-        target_data: list of target mapping data that will be updated in place
-        - output_path: path to the output images. The images folder will be organized as follow:
-            output_path
-                |--- sampled_images.zip
-                |--- input_mapping.parquet
-                |--- target.parquet
-        """
+        """Save the images to the output folder."""
 
         for image, label in zip(images, labels, strict=False):
             # Create the temp folder if it doesn't exist
@@ -267,7 +303,7 @@ class ImageDatasetGenerator(DatasetGenerator):
 
             os.makedirs(temp_folder, exist_ok=True)
             # Save the image
-            filename = str(uuid4()) + '.' + self.FILE_TYPE
+            filename = str(uuid4()) + '.' + self.FILE_TYPE.value
             save_path = os.path.join(temp_folder, filename)
             save_image(image, save_path)
 
@@ -275,7 +311,7 @@ class ImageDatasetGenerator(DatasetGenerator):
             input_mapping_data.append(
                 {
                     'sample-id': self.current_id,
-                    'timestamp': self.current_timestamp,
+                    'timestamp': self._current_timestamp,
                     'file_name': filename,
                 }
             )
@@ -284,14 +320,27 @@ class ImageDatasetGenerator(DatasetGenerator):
             target_data.append(
                 {
                     'sample-id': self.current_id,
-                    'timestamp': self.current_timestamp,
+                    'timestamp': self._current_timestamp,
                     'label': label,
                 }
             )
-
+            if self.compute_embeddings:
+                embedder = ImageEmbedder(device=self.device.type)
+                embedding = (
+                    embedder.compute_embeddings(image, preprocess=False)
+                    .squeeze()
+                    .tolist()
+                )
+                embeddings_data.append(
+                    {
+                        'sample-id': self.current_id,
+                        'timestamp': self._current_timestamp,
+                        'embedding': embedding,
+                    }
+                )
             # Update the sample id and the timestamp
             self.current_id += 1
-            self.current_timestamp += self.sample_delta_timestamp
+            self._current_timestamp += self.sample_delta_timestamp
 
     def _make_archive(self, output_path: str) -> str:
         """
@@ -313,125 +362,137 @@ class ImageDatasetGenerator(DatasetGenerator):
             folder_path_zipped = shutil.make_archive(
                 folder_path, 'zip', folder_path
             )
-            print(f'Archive created successfully: {folder_path}.zip')
+            logger.info(f'Archive created successfully: {folder_path}.zip')
 
         except Exception as e:
             # Handle errors during the zipping process
-            print(f'An error occurred while creating the archive: {e}')
+            logger.error(f'An error occurred while creating the archive: {e}')
             raise e
         else:
             # Only delete the original folder if no exception was raised
             try:
                 shutil.rmtree(folder_path)
-                print(
+                logger.info(
                     f"Original folder '{folder_path}' deleted after zipping."
                 )
             except Exception as e:
-                print(f'Failed to delete the original folder: {e}')
+                logger.error(f'Failed to delete the original folder: {e}')
                 raise e
 
         return folder_path_zipped
 
     def add_abrupt_drift(
         self,
-        drift_target: DriftTarget,
-        drift_level: float | None = None,
-        input_drift_type: InputDriftType | None = None,
-        transform_list: list[TransformInfo] | None = None,
-    ):
-        """Add abrupt drift.
-        The drift can be applied to the input images defining a transformation pipeline.
-        When calling add_abrupt_drift, the processing pipeline is updated and will be applied to the next samples.
+        transform_list: list[TransformInfo],
+    ) -> None:
+        """Add an abrupt drift to the input images. The drift can be applied to the input images defining a transformation pipeline.
+        When calling add_abrupt_drift, the processing pipeline is updated and will be applied to the next call to samples.
 
-        parameters:
-        -----------
-        drift_target: target of the drift
-        drift_level: level of the drift in [0, 1]
-        input_drift_type: type of the drift
-        transform_list: list of transformations to apply to the images
+        Args:
+            transform_list (list[TransformInfo]): list of transformations to apply to the images
 
-        raises:
-        -------
-        ValueError: if drift target or input drift type are not supported
-
+        Raises:
+            ValueError: if transform_list is None
         """
-        match drift_target:
-            case DriftTarget.INPUT:
-                match input_drift_type:
-                    case InputDriftType.IMAGE_AUGMENTATION:
-                        if drift_level is not None:
-                            if drift_level == 0:
-                                logger.warning(
-                                    'Drift level is 0, resetting the transformation pipeline.'
-                                )
-                                # Reset the transformation pipeline, next samples will be drift-free
-                                self.transform_pipeline = None
-                                return
-                            transform_pipeline = ImageTransformFactory._make_default_transform_pipeline(
-                                drift_level=drift_level
-                            )
-                            if transform_list is not None:
-                                logger.warning(
-                                    'Both drift_level and transformation are provided, drift_level will be used'
-                                )
-                        elif transform_list is None:
-                            raise ValueError(
-                                'Either drift_level or transformation must be provided, now both are None'
-                            )
-                        else:
-                            transform_pipeline = (
-                                ImageTransformFactory.make_transform_pipeline(
-                                    transform_list=transform_list
-                                )
-                            )
-                        self.transform_pipeline = transform_pipeline
-                    case _:
-                        raise ValueError(
-                            f'Input drift type {input_drift_type} is not supported'
-                        )
-            case _:
+
+        if transform_list is None or len(transform_list) == 0:
+            raise ValueError(
+                f'The transformation list cannot be None or empty. Got: {transform_list}'
+            )
+        else:
+            transform_pipeline = ImageTransformFactory.make_transform_pipeline(
+                transform_list=transform_list
+            )
+        self.transform_pipeline = transform_pipeline
+        self._transform_list = transform_list
+
+    def evaluate_transformation_pipeline(
+        self, similarity_func: Callable | None = None
+    ) -> list[dict]:
+        """Evaluate the transformation pipeline by computing the similarity between the original and transformed images.
+
+        Args:
+            similarity_func (Callable): function to compute the similarity between the original and transformed images. Default is KL divergence.
+
+        Returns:
+            list[dict]: list of dictionaries containing the transformation methods, parameters, similarity and drift level for each transformation applied.
+        """
+        metrics = []
+        if similarity_func is None:
+            similarity_func = compute_embeddings_kl_divergence
+
+        for batch, _ in tqdm(
+            self.dataloader,
+            desc='Processing batches',
+            total=len(self.dataloader),
+            leave=False,
+        ):
+            if self.transform_pipeline is None:
                 raise ValueError(
-                    f'Drift target {drift_target} is not supported'
+                    'Transformation pipeline is None. Please add a transformation pipeline before evaluating it.'
+                )
+            else:
+                # Compute the embeddings for the original and transformed images
+                original_embeddings = cast(
+                    torch.Tensor,
+                    ImageEmbedder().compute_embeddings(
+                        images=batch, preprocess=False, to_numpy=False
+                    ),
                 )
 
-    def get_dataschema(self) -> DataSchema:
-        """
-        Returns the data schema
-        """
+                # Compute the embeddings for the transformed images
+                transformed_images = self.transform_pipeline(batch)
+                transormed_embeddings = cast(
+                    torch.Tensor,
+                    ImageEmbedder().compute_embeddings(
+                        images=transformed_images,
+                        preprocess=False,
+                        to_numpy=False,
+                    ),
+                )
 
-        columns = [
-            ColumnInfo(
-                name='timestamp',
-                role=ColumnRole.TIME_ID,
-                is_nullable=False,
-                data_type=DataType.FLOAT,
-            ),
-            ColumnInfo(
-                name='sample-id',
-                role=ColumnRole.ID,
-                is_nullable=False,
-                data_type=DataType.STRING,
-            ),
-            ColumnInfo(
-                name='label',
-                role=ColumnRole.TARGET,
-                is_nullable=False,
-                data_type=DataType.CATEGORICAL,
-                possible_values=self.LABELS,
-            ),
-            ColumnInfo(
-                name='image',
-                role=ColumnRole.INPUT,
-                is_nullable=False,
-                data_type=DataType.ARRAY_3,
-                dims=(224, 224, 3),
-                image_mode=ImageMode.RGB,
-            ),
-        ]
-        return DataSchema(columns=columns)
+                # Compute the similarity between the original and transformed images
+                similarity = similarity_func(
+                    original_features=original_embeddings,
+                    transformed_features=transormed_embeddings,
+                )
+                # Get the parameters for each transformation
+                params = {}
+                augmentation_methods = []
+                for transform_element in self._transform_list:  # type: ignore
+                    base_key = transform_element.transf_type
+                    augmentation_methods.append(base_key)
+
+                    for key, value in AVAILABLE_TRANSFORM_TYPES[
+                        base_key
+                    ].drift_params.items():
+                        params[f'{base_key}_{key}'] = value
+                    for key, value in AVAILABLE_TRANSFORM_TYPES[
+                        base_key
+                    ].constant_params.items():
+                        params[f'{base_key}_{key}'] = value
+
+                drift_levels = [
+                    transform_element.drift_level
+                    for transform_element in self._transform_list  # type: ignore
+                ]
+
+                avg_drift_level = sum(drift_levels) / len(drift_levels)
+
+                row_dict = {
+                    self.TRASFORMATION_METHOD_COLUMN: augmentation_methods,
+                    **params,
+                    self.SIMILARITY_COLUMN: similarity,
+                    self.DRIFT_LEVEL_COLUMN: avg_drift_level,
+                }
+
+                metrics.append(row_dict)
+
+        return metrics
 
     def reset(self):
         """Reset the generator to the initial state."""
         self.current_id = 0
-        self.current_timestamp = 1717232400.0
+        self._current_timestamp = self._default_timestamp
         self.transform_pipeline = None
+        self._transform_list = None

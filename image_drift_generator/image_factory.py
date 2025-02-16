@@ -4,38 +4,37 @@ from image_drift_generator.enums import ImageTransform
 from image_drift_generator.models import TransformInfo, TransformType
 from utils.settings.settings_provider import SettingsProvider
 
-settings_provider = SettingsProvider()
 
-SUPPORTED_TRANSFORM = {
+AVAILABLE_TRANSFORM_TYPES = {
     ImageTransform.ROTATE: TransformType(
         transformation=transforms.RandomRotation,
-        drift_params=settings_provider.get_rotate_parameters(),
+        drift_params=SettingsProvider().get_rotate_parameters(),
     ),
     ImageTransform.BRIGHTNESS: TransformType(
         transformation=transforms.ColorJitter,
-        drift_params=settings_provider.get_brightness_parameters(),
+        drift_params=SettingsProvider().get_brightness_parameters(),
     ),
     ImageTransform.CONTRAST: TransformType(
         transformation=transforms.ColorJitter,
-        drift_params=settings_provider.get_contrast_parameters(),
+        drift_params=SettingsProvider().get_contrast_parameters(),
     ),
     ImageTransform.SATURATION: TransformType(
         transformation=transforms.ColorJitter,
-        drift_params=settings_provider.get_saturation_parameters(),
+        drift_params=SettingsProvider().get_saturation_parameters(),
     ),
     ImageTransform.HUE: TransformType(
         transformation=transforms.ColorJitter,
-        drift_params=settings_provider.get_hue_parameters(),
+        drift_params=SettingsProvider().get_hue_parameters(),
     ),
     ImageTransform.GAUSSIAN_BLUR: TransformType(
         transformation=transforms.GaussianBlur,
-        constant_params=settings_provider.get_gaussian_blur_constant_parameters(),
-        drift_params=settings_provider.get_gaussian_blur_drift_parameters(),
+        constant_params=SettingsProvider().get_gaussian_blur_constant_parameters(),
+        drift_params=SettingsProvider().get_gaussian_blur_drift_parameters(),
     ),
     ImageTransform.GAUSSIAN_NOISE: TransformType(
         transformation=transforms.GaussianNoise,
-        constant_params=settings_provider.get_gaussian_noise_constant_parameters(),
-        drift_params=settings_provider.get_gaussian_noise_drift_parameters(),
+        constant_params=SettingsProvider().get_gaussian_noise_constant_parameters(),
+        drift_params=SettingsProvider().get_gaussian_noise_drift_parameters(),
     ),
     ImageTransform.DEFAULT: None,
 }
@@ -63,14 +62,14 @@ class ImageTransformFactory:
         """
         if transform_info is None:
             raise ValueError('Transform info can not be None.')
-        if transform_info.transf_type in SUPPORTED_TRANSFORM:
+        if transform_info.transf_type in AVAILABLE_TRANSFORM_TYPES:
             if transform_info.transf_type == ImageTransform.DEFAULT:
                 return ImageTransformFactory._make_default_transform_pipeline(
                     transform_info.drift_level
                 )
 
             # Get the transform class name
-            transf_type: TransformType = SUPPORTED_TRANSFORM[
+            transf_type: TransformType = AVAILABLE_TRANSFORM_TYPES[
                 transform_info.transf_type
             ]
             transform_cls = transf_type.transformation
@@ -82,7 +81,7 @@ class ImageTransformFactory:
             # Update drift parameters with the drift level
             for key, value in drift_params.items():
                 if (
-                    settings_provider.is_uniform_color_jitter()
+                    SettingsProvider().is_uniform_color_jitter()
                     and transform_cls == transforms.ColorJitter
                 ):
                     params[key] = (
@@ -143,7 +142,7 @@ class ImageTransformFactory:
         if drift_level < 0 or drift_level > 1:
             raise ValueError('Drift level must be in [0, 1]')
 
-        if drift_level <= settings_provider.get_default_transform_threshold():
+        if drift_level <= SettingsProvider().get_default_transform_threshold():
             transform_list = [
                 TransformInfo(
                     transf_type=ImageTransform.GAUSSIAN_BLUR,
@@ -174,7 +173,7 @@ class ImageTransformFactory:
         input transformation pipeline
         """
         if input_dim is None:
-            input_dim = (224, 224)
+            input_dim = SettingsProvider().get_default_input_dim()
         return transforms.Compose(
             [
                 transforms.Resize(input_dim),

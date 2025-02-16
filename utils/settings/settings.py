@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # Default timestamp info
     default_timestamp: float
     default_delta_timestamp: float
+    default_input_dim: int
+    default_batch_size: int
 
     # Default transformation thresholds
     default_transformation_threshold: float

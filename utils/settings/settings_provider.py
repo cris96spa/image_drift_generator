@@ -112,6 +112,14 @@ class SettingsProvider(metaclass=Singleton):
             device = torch.device('mps')
         return device
 
+    def get_default_input_dim(self) -> tuple[int, int]:
+        """Return the default input dimension."""
+        return self.settings.default_input_dim, self.settings.default_input_dim
+
+    def get_default_batch_size(self) -> int:
+        """Return the default batch size."""
+        return self.settings.default_batch_size
+
 
 if __name__ == '__main__':
     settings_provider = SettingsProvider()
@@ -128,3 +136,4 @@ if __name__ == '__main__':
     print(settings_provider.get_gaussian_noise_drift_parameters())
     print(settings_provider.get_gaussian_noise_constant_parameters())
     print(settings_provider.get_default_transform_threshold())
+    print(settings_provider.get_device())

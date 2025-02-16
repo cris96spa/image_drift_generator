@@ -1,6 +1,10 @@
 import plotly.graph_objects as go
 import numpy as np
 import polars as pl
+import matplotlib.pyplot as plt
+from image_drift_generator.image_generator import ImageDatasetGenerator
+from image_drift_generator.models import TransformInfo
+from tqdm import tqdm
 
 COLORS = [
     '#636EFA',
@@ -23,6 +27,28 @@ COLORS = [
     '#7FC97F',
     '#5B5B5B',
 ]
+
+
+def plot_histogram(image, ax, title='Pixel Intensity Histogram'):
+    """Plot histogram of pixel intensities for an image."""
+    # Image is assumed to be a tensor in CHW format
+    image = image.reshape(-1, 3)  # Flatten the image pixels by channel
+
+    colors = ['r', 'g', 'b']  # Color channels
+    for i, color in enumerate(colors):
+        ax.hist(
+            image[:, i],
+            bins=256,
+            color=color,
+            alpha=0.4,
+            label=f'Channel {color.upper()}',
+            density=False,
+        )
+    ax.legend()
+
+    ax.set_title(title)
+    ax.set_xlim([0, 1])  # Assuming normalized [0, 1] pixel values
+    ax.set_ylim([0, 1000])
 
 
 def plot_similarity_metric(
@@ -113,7 +139,7 @@ def plot_similarity_metric(
     fig.show()
 
 
-def plotly_boxplot_metric(
+def plot_boxplot_metric(
     df: pl.DataFrame,
     metric_name: str,
     labels: list[str],
@@ -171,4 +197,39 @@ def plotly_boxplot_metric(
     fig.show()
 
 
-# endregion
+def visualize_transformations(
+    image_generator: ImageDatasetGenerator,
+    description: str,
+    transform_lists: list[list[TransformInfo]],
+):
+    for transform_list in tqdm(
+        transform_lists,
+        desc=description,
+        total=len(transform_lists),
+    ):
+        image_generator.add_abrupt_drift(transform_list)
+        for i in range(1):
+            fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(10, 5))
+            axes[0].imshow(image_generator.dataset[i][0].permute(1, 2, 0))
+            axes[1].imshow(
+                image_generator.transform_pipeline(
+                    image_generator.dataset[i][0]
+                ).permute(1, 2, 0)  # type: ignore
+            )
+            axes[0].set_title('Original Image')
+            axes[1].set_title(f'Drift Level: {transform_list[0].drift_level}')
+            plt.show()
+            fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(10, 5))
+            plot_histogram(
+                image_generator.dataset[i][0].permute(1, 2, 0),
+                axes[0],
+                'Original Image Histogram',
+            )
+            plot_histogram(
+                image_generator.transform_pipeline(
+                    image_generator.dataset[i][0]
+                ).permute(1, 2, 0),  # type: ignore
+                axes[1],
+                'Transformed Image Histogram',
+            )
+            plt.show()
