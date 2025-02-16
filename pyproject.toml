@@ -13,40 +13,18 @@ classifiers = [
 ]
 
 dependencies = [
-    "setuptools",
-    "llmx>=0.0.21a",
-    "pydantic",
-    "uvicorn", 
-    "typer",
-    "fastapi", 
-    "python-multipart", 
-    "scipy",
-    "types-PyYAML",
-    "scikit-learn",
-    "numpy",
-    "pandas",
-    "polars",
-    "matplotlib",
-    "altair", 
-    "seaborn",
-    "plotly", 
-    "plotnine",
-    "statsmodels", 
-    "matplotlib-venn",
-    "openpyxl",
-    "pyarrow",
-    "pyvis",
-    "python-dotenv",
-    "langchain",
-    "langchain-community",
-    "langchain-experimental",
-    "langchain_google_community",
-    "langchain-openai",
-    "langgraph",
-    "langfuse",
-    "opencv-python",
-    "holoviews",
-    "shap",
+    "setuptools>=75.6.0",
+    "llmx>=0.0.21a0",
+    "pydantic>=2.10.3",
+    "types-pyyaml>=6.0.12.20241230",
+    "scikit-learn>=1.5.2",
+    "numpy>=1.26.4",
+    "pandas>=2.2.3",
+    "polars>=1.22.0",
+    "plotly>=6.0.0",
+    "python-dotenv>=1.0.1",
+    "opencv-python>=4.11.0.86",
+    "pydantic-settings>=2.7.1",
 ]
 
 # list of project dev dependencies
@@ -66,43 +44,21 @@ image = [
     "torchvision==0.19.0 ; platform_system != 'Windows'",
 ]
 
-text = [
-    "torch==2.4.0+cu124 ; platform_system == 'Windows'",
-    "torch==2.4.0 ; platform_system != 'Windows'",
-    "transformers[torch]",
-    "sentence-transformers",
-    "langchain",
-    "langchain-text-splitters",
-]
-
-security = [
-    "tiktoken==0.7.0",
-    "openai==1.51.2",
-    "litellm==1.42.1",
-    "langchain_openai==0.1.17",
-    "langchain_google_genai==1.0.8",
-    "google-generativeai==0.7.2",
-    "anthropic==0.31.2",
-    "langchain_anthropic==0.1.20",
-    "langchain_huggingface==0.0.3",
-]
 
 [dependency-groups]
-
-# Dependencies used to build package
-build = ["twine", "build"]
-
+build = [
+    "build>=1.2.2.post1",
+    "twine>=6.1.0",
+]
 dev = [
-    "mypy",
-    "jupyter",
-    "ipykernel",
-    "pytest",
-    "pytest-cov",
-    "pytest-mock",
-    "pytest-asyncio",
-    "pytest-xdist[psutil]",
-    "ruff",
-    "types-requests",
+    "mypy>=1.15.0",
+    "jupyter>=1.1.1",
+    "ipykernel>=6.29.5",
+    "pytest>=8.3.4",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "pytest-asyncio>=0.25.3",
+    "ruff>=0.9.6",
 ]
 
 ### INDEXES
