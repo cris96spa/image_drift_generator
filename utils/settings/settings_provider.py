@@ -2,6 +2,7 @@ import os
 import time
 from utils.singleton import Singleton
 from utils.settings.settings import Settings
+import torch
 
 
 class SettingsProvider(metaclass=Singleton):
@@ -101,6 +102,15 @@ class SettingsProvider(metaclass=Singleton):
             dict: dictionary containing constant_params for the gaussian noise transformation.
         """
         return {'mean': self.settings.gaussian_noise__mean}
+
+    def get_device(self) -> torch.device:
+        """Return the device to be used for computation."""
+        device = torch.device('cpu')
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            device = torch.device('mps')
+        return device
 
 
 if __name__ == '__main__':
