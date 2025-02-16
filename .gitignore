@@ -137,4 +137,3 @@ mlartifacts/
 scripts/mlruns/
 mlruns/
 mlflow-database/
-*.png
