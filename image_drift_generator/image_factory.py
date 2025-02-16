@@ -36,7 +36,11 @@ AVAILABLE_TRANSFORM_TYPES = {
         constant_params=SettingsProvider().get_gaussian_noise_constant_parameters(),
         drift_params=SettingsProvider().get_gaussian_noise_drift_parameters(),
     ),
-    ImageTransform.DEFAULT: None,
+    ImageTransform.DEFAULT: TransformType(
+        transformation=transforms.GaussianNoise,
+        constant_params={},
+        drift_params={},
+    ),
 }
 
 
