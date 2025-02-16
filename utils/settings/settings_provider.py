@@ -3,6 +3,7 @@ import time
 from utils.singleton import Singleton
 from utils.settings.settings import Settings
 import torch
+from dotenv import load_dotenv
 
 
 class SettingsProvider(metaclass=Singleton):
@@ -10,6 +11,7 @@ class SettingsProvider(metaclass=Singleton):
 
     def __init__(self) -> None:
         self.settings = Settings()  # type: ignore
+        load_dotenv()
 
     def is_debug(self) -> bool:
         """Return whether the application is in debug mode."""

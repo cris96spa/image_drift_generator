@@ -37,7 +37,6 @@ class DatasetGenerator(ABC):
         self.seed = seed
 
         self.device = SettingsProvider().get_device()
-
         # Setting seed for reproducibility
         np.random.seed(seed)
         random.seed(seed)
@@ -188,9 +187,9 @@ class ImageDatasetGenerator(DatasetGenerator):
         """
 
         # Check if the number of samples required is greater than the number of residual samples in the dataset
-        if num_samples + self.current_id > len(self.dataset):
+        if num_samples + self._current_id > len(self.dataset):
             raise ValueError(
-                f'Number of samples required num_samples: {num_samples}, is greater than the number of residual samples in the dataset (total length - cursor): {len(self.dataset) - self.current_id}'
+                f'Number of samples required num_samples: {num_samples}, is greater than the number of residual samples in the dataset (total length - cursor): {len(self.dataset) - self._current_id}'
             )
 
         # Initialize the sampled count to keep track of the number of samples extracted
@@ -201,7 +200,7 @@ class ImageDatasetGenerator(DatasetGenerator):
 
         # Skip the samples already seen
         data_iterator = cast(DataLoader, iter(self.dataloader))
-        for i in range(self.current_id // self.batch_size):
+        for i in range(self._current_id // self.batch_size):
             next(data_iterator)  # type: ignore
 
         # Sample the images and apply the transformation pipeline if defined
@@ -310,7 +309,7 @@ class ImageDatasetGenerator(DatasetGenerator):
             # Extend the input mapping data
             input_mapping_data.append(
                 {
-                    'sample-id': self.current_id,
+                    'sample-id': self._current_id,
                     'timestamp': self._current_timestamp,
                     'file_name': filename,
                 }
@@ -319,7 +318,7 @@ class ImageDatasetGenerator(DatasetGenerator):
             # Extend the target mapping data
             target_data.append(
                 {
-                    'sample-id': self.current_id,
+                    'sample-id': self._current_id,
                     'timestamp': self._current_timestamp,
                     'label': label,
                 }
@@ -333,13 +332,13 @@ class ImageDatasetGenerator(DatasetGenerator):
                 )
                 embeddings_data.append(
                     {
-                        'sample-id': self.current_id,
+                        'sample-id': self._current_id,
                         'timestamp': self._current_timestamp,
                         'embedding': embedding,
                     }
                 )
             # Update the sample id and the timestamp
-            self.current_id += 1
+            self._current_id += 1
             self._current_timestamp += self.sample_delta_timestamp
 
     def _make_archive(self, output_path: str) -> str:
@@ -492,7 +491,7 @@ class ImageDatasetGenerator(DatasetGenerator):
 
     def reset(self):
         """Reset the generator to the initial state."""
-        self.current_id = 0
+        self._current_id = 0
         self._current_timestamp = self._default_timestamp
         self.transform_pipeline = None
         self._transform_list = None
